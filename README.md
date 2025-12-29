@@ -157,7 +157,9 @@ dcasino/
 │   └── libraries/
 │       ├── Errors.sol              # Custom errors
 │       ├── BetLib.sol              # Bet structures
-│       └── PayoutLib.sol           # Payout calculations
+│       ├── PayoutLib.sol           # Payout calculations
+│       ├── RouletteLib.sol         # Roulette bet types & validation
+│       └── BlackjackLib.sol        # Card handling & hand calculations
 ├── test/
 │   ├── unit/                       # Unit tests
 │   ├── integration/                # Integration tests
@@ -322,6 +324,119 @@ contract MyGame is BaseGameVRF {
 }
 ```
 
+### Roulette
+
+European roulette with single zero (0-36) and all standard bet types:
+
+```solidity
+// Place a straight bet (single number, pays 35:1)
+roulette.placeStraightBet{value: 1 ether}(17);
+
+// Place a split bet (two adjacent numbers, pays 17:1)
+roulette.placeSplitBet{value: 1 ether}(17, 18);
+
+// Place even-money bets (pays 1:1)
+roulette.placeRedBet{value: 1 ether}();
+roulette.placeBlackBet{value: 1 ether}();
+roulette.placeOddBet{value: 1 ether}();
+roulette.placeEvenBet{value: 1 ether}();
+roulette.placeLowBet{value: 1 ether}();   // 1-18
+roulette.placeHighBet{value: 1 ether}();  // 19-36
+
+// Place 2:1 bets
+roulette.placeColumnBet{value: 1 ether}(1);  // Column 1, 2, or 3
+roulette.placeDozenBet{value: 1 ether}(2);   // Dozen 1, 2, or 3
+
+// Place multiple bets in a single transaction
+RouletteLib.RouletteBet[] memory bets = new RouletteLib.RouletteBet[](2);
+bets[0] = RouletteLib.RouletteBet({
+    betType: RouletteLib.BetType.Straight,
+    numbers: [17],
+    amount: 0.5 ether
+});
+bets[1] = RouletteLib.RouletteBet({
+    betType: RouletteLib.BetType.Red,
+    numbers: RouletteLib.getRedNumbers(),
+    amount: 0.5 ether
+});
+roulette.placeBet{value: 1 ether}(abi.encode(bets));
+
+// View functions
+uint8 winningNumber = roulette.getWinningNumber(betId);
+RouletteLib.RouletteBet[] memory placedBets = roulette.getRouletteBets(betId);
+```
+
+**Bet Types and Payouts:**
+
+| Bet Type | Numbers Covered | Payout |
+|----------|----------------|--------|
+| Straight | 1 | 35:1 |
+| Split | 2 | 17:1 |
+| Street | 3 | 11:1 |
+| Corner | 4 | 8:1 |
+| Line | 6 | 5:1 |
+| Column | 12 | 2:1 |
+| Dozen | 12 | 2:1 |
+| Red/Black | 18 | 1:1 |
+| Odd/Even | 18 | 1:1 |
+| High/Low | 18 | 1:1 |
+
+**House Edge:** 2.7% (European roulette with single zero)
+
+### Blackjack
+
+Standard Vegas blackjack with single 52-card deck:
+
+```solidity
+// Place a blackjack bet
+uint256 betId = blackjack.placeBet{value: 1 ether}("");
+
+// After initial deal (VRF callback), player can take actions:
+blackjack.hit(betId);              // Take another card
+blackjack.stand(betId);            // Stand on current hand
+blackjack.doubleDown{value: 1 ether}(betId);  // Double bet, take one card, stand
+
+// Splitting (when initial cards have same rank)
+blackjack.split{value: 1 ether}(betId);  // Split into two hands
+
+// Insurance (when dealer shows Ace)
+blackjack.takeInsurance(betId);    // Side bet against dealer blackjack
+
+// View functions
+(uint8[] memory cardIds, uint8 value, bool isSoft, bool isBlackjack) = blackjack.getPlayerHand(betId, 0);
+(uint8[] memory dealerCardIds, uint8 dealerValue, bool dealerSoft, bool dealerBJ) = blackjack.getDealerHand(betId);
+BlackjackLib.GameState state = blackjack.getGameState(betId);
+```
+
+**Game Flow:**
+1. Player places bet → VRF randomness requested (10 random words)
+2. Initial deal: Player gets 2 cards face up, Dealer gets 1 up + 1 down
+3. Check for blackjacks - if either has blackjack, resolve immediately
+4. Player turn: Hit, Stand, Double Down, or Split
+5. After player stands (or busts), dealer reveals hole card
+6. Dealer draws according to rules (hits on 16 or less, hits soft 17)
+7. Outcomes determined and payouts processed
+
+**Payouts:**
+| Outcome | Payout |
+|---------|--------|
+| Player Blackjack | 3:2 |
+| Player Win | 1:1 |
+| Dealer Bust | 1:1 |
+| Push | Bet returned |
+| Insurance (dealer BJ) | 2:1 |
+| Double Down Win | 2:2 (double bet) |
+
+**Rules:**
+- Dealer hits on soft 17
+- Blackjack pays 3:2
+- Split up to 3 times (4 hands max)
+- Double down on any two cards
+- No re-splitting aces (planned)
+- Insurance pays 2:1 when dealer has blackjack
+
+**House Edge:** 0.5% (with basic strategy)
+
 ## Security
 
 ### Access Control
@@ -438,8 +553,10 @@ depth = 100
 | VRFConsumerTest       | 18     | 0      | 0       |
 | GameResolverTest      | 23     | 0      | 0       |
 | SystemIntegrationTest | 18     | 0      | 0       |
+| RouletteTest          | 43     | 0      | 0       |
+| BlackjackTest         | 30     | 0      | 0       |
 ╰-----------------------+--------+--------+---------╯
-Total: 159 tests passing
+Total: 232 tests passing
 ```
 
 ## Roadmap
@@ -463,15 +580,21 @@ Total: 159 tests passing
 - [x] VRF unit tests
 - [x] GameResolver unit tests
 
-### Phase 3 (Planned)
-- [ ] Roulette game implementation
-- [ ] European roulette rules (single zero)
-- [ ] All bet types (straight, split, street, etc.)
+### Phase 3 (Complete)
+- [x] Roulette game implementation
+- [x] European roulette rules (single zero)
+- [x] All bet types (straight, split, street, corner, line, column, dozen, red/black, odd/even, high/low)
+- [x] RouletteLib library with validation and payout calculations
+- [x] Comprehensive unit tests (43 tests)
 
-### Phase 4 (Planned)
-- [ ] Blackjack game implementation
-- [ ] Standard blackjack rules
-- [ ] Split, double down, insurance
+### Phase 4 (Complete)
+- [x] Blackjack game implementation
+- [x] Standard Vegas blackjack rules (dealer hits soft 17)
+- [x] BlackjackLib library with card handling and hand calculations
+- [x] Multi-step game flow with VRF randomness (10 words)
+- [x] Hit, Stand, Double Down, Split actions
+- [x] Insurance side bet
+- [x] Comprehensive unit tests (30 tests)
 
 ### Phase 5 (Planned)
 - [ ] Deployment scripts for testnets
