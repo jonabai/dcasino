@@ -10,19 +10,23 @@ A modular, upgradeable smart contract system for decentralized casino games on E
                     │  (Admin Hub)    │
                     └────────┬────────┘
                              │
-              ┌──────────────┼──────────────┐
-              │              │              │
-     ┌────────▼────────┐ ┌───▼───┐ ┌────────▼────────┐
-     │   GameRegistry  │ │       │ │    Treasury     │
-     │ (Plugin System) │ │ Games │ │   (Bankroll)    │
-     └────────┬────────┘ │       │ └────────┬────────┘
-              │          └───┬───┘          │
-              │              │              │
-              └──────────────┼──────────────┘
+         ┌───────────────────┼───────────────────┐
+         │                   │                   │
+┌────────▼────────┐  ┌───────▼───────┐  ┌────────▼────────┐
+│  GameRegistry   │  │   VRFConsumer │  │    Treasury     │
+│ (Plugin System) │  │  (Randomness) │  │   (Bankroll)    │
+└────────┬────────┘  └───────┬───────┘  └────────┬────────┘
+         │                   │                   │
+         └───────────────────┼───────────────────┘
                              │
                     ┌────────▼────────┐
-                    │    BaseGame     │
+                    │  BaseGameVRF    │
                     │   (Abstract)    │
+                    └────────┬────────┘
+                             │
+                    ┌────────▼────────┐
+                    │  GameResolver   │
+                    │  (Automation)   │
                     └─────────────────┘
 ```
 
@@ -33,7 +37,15 @@ A modular, upgradeable smart contract system for decentralized casino games on E
 | **Casino.sol** | Central admin hub - manages ecosystem pause, treasury/registry references, emergency functions |
 | **Treasury.sol** | Bankroll management - deposits, withdrawals, bet reservations, payouts, fee collection |
 | **GameRegistry.sol** | Plugin architecture - game registration, enable/disable, statistics tracking |
-| **BaseGame.sol** | Abstract game template - common bet logic, treasury integration, randomness requests |
+| **BaseGame.sol** | Abstract game template - common bet logic, treasury integration |
+| **BaseGameVRF.sol** | VRF-enabled game template - extends BaseGame with Chainlink VRF integration |
+
+### Chainlink Integration (Phase 2)
+
+| Contract | Description |
+|----------|-------------|
+| **VRFConsumer.sol** | Centralized VRF manager - handles randomness requests/callbacks for all games |
+| **GameResolver.sol** | Chainlink Automation - automatically triggers bet resolution for pending bets |
 
 ### Role Hierarchy
 
@@ -47,8 +59,29 @@ PAUSER   TREASURY_ROLE   GAME_MANAGER  UPGRADER
   └── Controls pause/unpause              └── Can upgrade contracts
 
 GAME_ROLE ── Registered games can call treasury functions
-RESOLVER_ROLE ── Can resolve bets (for Chainlink Automation)
+RESOLVER_ROLE ── Can resolve bets (VRFConsumer)
+REQUESTER_ROLE ── Can request VRF randomness
+FORWARDER_ROLE ── Chainlink Automation forwarder
 OPERATOR_ROLE ── Game operators (pause individual games, set bet limits)
+```
+
+### VRF Flow
+
+```
+Player places bet → Game requests randomness → VRFConsumer
+                                                    │
+                                                    ▼
+                                          VRF Coordinator
+                                                    │
+                                                    ▼
+                                   rawFulfillRandomWords()
+                                                    │
+                                                    ▼
+                                         Game.resolveBet()
+                                                    │
+                              ┌─────────────────────┼─────────────────────┐
+                              │                                           │
+                           Win: Payout                              Loss: Release
 ```
 
 ### Treasury Flow
@@ -106,15 +139,21 @@ dcasino/
 │   │   ├── ICasino.sol
 │   │   ├── ITreasury.sol
 │   │   ├── IGameRegistry.sol
-│   │   └── IGame.sol
+│   │   ├── IGame.sol
+│   │   └── IVRFConsumer.sol
 │   ├── abstracts/
-│   │   └── BaseGame.sol            # Abstract base for games
+│   │   ├── BaseGame.sol            # Abstract base for games
+│   │   └── BaseGameVRF.sol         # VRF-enabled game base
 │   ├── games/                      # Game implementations (Phase 3-4)
 │   │   ├── Roulette.sol
 │   │   └── Blackjack.sol
-│   ├── chainlink/                  # Chainlink integration (Phase 2)
-│   │   ├── VRFConsumer.sol
-│   │   └── GameResolver.sol
+│   ├── chainlink/
+│   │   ├── VRFConsumer.sol         # Centralized VRF manager
+│   │   ├── GameResolver.sol        # Chainlink Automation
+│   │   ├── VRFConsumerBaseV2Plus.sol
+│   │   └── interfaces/
+│   │       ├── IVRFCoordinatorV2Plus.sol
+│   │       └── IAutomationCompatible.sol
 │   └── libraries/
 │       ├── Errors.sol              # Custom errors
 │       ├── BetLib.sol              # Bet structures
@@ -217,14 +256,56 @@ registry.disableGame(gameAddress);
 IGameRegistry.GameInfo memory info = registry.getGameByAddress(gameAddress);
 ```
 
-### BaseGame
+### VRFConsumer
 
-Games inherit from BaseGame for common functionality:
+The VRFConsumer handles Chainlink VRF V2.5 randomness:
 
 ```solidity
-contract MyGame is BaseGame {
-    function initialize(address admin, ...) external initializer {
-        __BaseGame_init(admin, "MyGame", casino, treasury, registry);
+// Request randomness for a bet
+uint256 requestId = vrfConsumer.requestRandomness(gameAddress, betId);
+
+// Check if request is pending
+bool pending = vrfConsumer.isPending(requestId);
+
+// Get request details
+VRFRequest memory request = vrfConsumer.getRequest(requestId);
+
+// Get VRF statistics
+(uint256 requests, uint256 fulfilled, uint256 pending) = vrfConsumer.getStats();
+```
+
+### GameResolver
+
+The GameResolver implements Chainlink Automation:
+
+```solidity
+// Enable automation for a game
+resolver.enableAutomation(gameAddress);
+
+// Check if upkeep is needed (called by Chainlink nodes)
+(bool upkeepNeeded, bytes memory performData) = resolver.checkUpkeep("");
+
+// Perform upkeep (resolve bets)
+resolver.performUpkeep(performData);
+
+// Manual upkeep for testing/emergency
+resolver.manualUpkeep(gameAddress, betIds);
+```
+
+### BaseGameVRF
+
+Games with VRF inherit from BaseGameVRF:
+
+```solidity
+contract MyGame is BaseGameVRF {
+    function initialize(
+        address admin,
+        address casino,
+        address treasury,
+        address registry,
+        address vrfConsumer
+    ) external initializer {
+        __BaseGameVRF_init(admin, "MyGame", casino, treasury, registry, vrfConsumer);
     }
 
     function _calculatePotentialPayout(uint256 amount, bytes calldata betData)
@@ -250,6 +331,8 @@ All contracts use OpenZeppelin's AccessControl for role-based permissions:
 - `DEFAULT_ADMIN_ROLE`: Full administrative access
 - `TREASURY_ROLE`: Can withdraw from treasury
 - `GAME_ROLE`: Registered games can interact with treasury
+- `RESOLVER_ROLE`: Can resolve bets
+- `REQUESTER_ROLE`: Can request VRF randomness
 - `UPGRADER_ROLE`: Can upgrade proxy implementations
 
 ### Safety Features
@@ -259,6 +342,7 @@ All contracts use OpenZeppelin's AccessControl for role-based permissions:
 - **Pausable**: Emergency pause functionality
 - **Custom Errors**: Gas-efficient error handling
 - **Storage Gaps**: Reserved storage slots for upgrade safety
+- **VRF Security**: Only coordinator can fulfill randomness
 
 ### Bet Flow
 
@@ -268,11 +352,13 @@ All contracts use OpenZeppelin's AccessControl for role-based permissions:
 4. Treasury checks if it can cover payout
 5. Bet amount transferred to treasury
 6. Potential payout reserved in treasury
-7. Randomness requested (VRF)
-8. On resolution:
-   - **Win**: Treasury pays out to player, releases remaining reserve
-   - **Loss**: Treasury releases entire reserve (keeps bet)
-   - **Cancel**: Treasury refunds bet, releases reserve
+7. VRFConsumer requests randomness from Chainlink VRF
+8. VRF Coordinator returns random words via callback
+9. VRFConsumer calls `resolveBet()` on the game
+10. On resolution:
+    - **Win**: Treasury pays out to player, releases remaining reserve
+    - **Loss**: Treasury releases entire reserve (keeps bet)
+    - **Cancel**: Treasury refunds bet, releases reserve
 
 ## Configuration
 
@@ -292,11 +378,25 @@ PRIVATE_KEY=
 ARBISCAN_API_KEY=
 BASESCAN_API_KEY=
 
-# Chainlink VRF (Phase 2)
-VRF_COORDINATOR=
-VRF_KEY_HASH=
-VRF_SUBSCRIPTION_ID=
+# Chainlink VRF V2.5
+VRF_COORDINATOR=0x...              # Arbitrum: 0x41034678D6C633D8a95c75e1138A360a28bA15d1
+VRF_KEY_HASH=0x...                 # Gas lane key hash
+VRF_SUBSCRIPTION_ID=123            # Your VRF subscription ID
+VRF_CALLBACK_GAS_LIMIT=500000      # Gas limit for callback
+
+# Chainlink Automation
+AUTOMATION_FORWARDER=0x...         # Automation forwarder address
 ```
+
+### Chainlink VRF V2.5 Configuration
+
+VRFConsumer is configured with:
+- `keyHash`: Gas lane selector (determines gas price for fulfillment)
+- `subscriptionId`: VRF subscription for payment
+- `requestConfirmations`: Block confirmations (default: 3)
+- `callbackGasLimit`: Max gas for callback (default: 500,000)
+- `numWords`: Random values per request (default: 1)
+- `nativePayment`: Use LINK (false) or native token (true)
 
 ### Foundry Configuration
 
@@ -335,9 +435,11 @@ depth = 100
 | TreasuryTest          | 40     | 0      | 0       |
 | CasinoTest            | 30     | 0      | 0       |
 | GameRegistryTest      | 30     | 0      | 0       |
+| VRFConsumerTest       | 18     | 0      | 0       |
+| GameResolverTest      | 23     | 0      | 0       |
 | SystemIntegrationTest | 18     | 0      | 0       |
 ╰-----------------------+--------+--------+---------╯
-Total: 118 tests passing
+Total: 159 tests passing
 ```
 
 ## Roadmap
@@ -352,11 +454,14 @@ Total: 118 tests passing
 - [x] BaseGame abstract contract
 - [x] Integration tests
 
-### Phase 2 (Planned)
-- [ ] Chainlink VRF V2.5 integration
-- [ ] Chainlink Automation for bet resolution
-- [ ] VRFConsumer contract
-- [ ] GameResolver contract
+### Phase 2 (Complete)
+- [x] Chainlink VRF V2.5 integration
+- [x] VRFConsumer contract for randomness requests
+- [x] VRFConsumerBaseV2Plus abstract contract
+- [x] GameResolver for Chainlink Automation
+- [x] BaseGameVRF abstract contract
+- [x] VRF unit tests
+- [x] GameResolver unit tests
 
 ### Phase 3 (Planned)
 - [ ] Roulette game implementation
@@ -373,6 +478,16 @@ Total: 118 tests passing
 - [ ] Mainnet deployment (Arbitrum/Base)
 - [ ] Frontend integration
 
+## Chainlink Network Addresses
+
+### Arbitrum One (Mainnet)
+- VRF Coordinator: `0x41034678D6C633D8a95c75e1138A360a28bA15d1`
+- Key Hash (500 gwei): `0x72d2b016bb5b62912afea355ebf33b91319f828738b111b723b78696b9847b63`
+
+### Arbitrum Sepolia (Testnet)
+- VRF Coordinator: `0x5CE8D5A2BC84beb22a398CCA51996F7930313D61`
+- Key Hash: `0x1770bdc7eec7771f7ba4ffd640f34260d7f095b79c92d34a5b2551d6f6cfd2be`
+
 ## License
 
 MIT License - see [LICENSE](LICENSE) for details.
@@ -388,5 +503,4 @@ MIT License - see [LICENSE](LICENSE) for details.
 
 - [OpenZeppelin Contracts](https://github.com/OpenZeppelin/openzeppelin-contracts) v5.x
 - [OpenZeppelin Contracts Upgradeable](https://github.com/OpenZeppelin/openzeppelin-contracts-upgradeable) v5.x
-- [Chainlink](https://github.com/smartcontractkit/chainlink) (Phase 2)
 - [Forge Std](https://github.com/foundry-rs/forge-std)
