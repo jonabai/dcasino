@@ -559,47 +559,90 @@ depth = 100
 Total: 232 tests passing
 ```
 
-## Roadmap
+## Deployment
 
-### Phase 1 (Complete)
-- [x] Project setup with Foundry
-- [x] Libraries (Errors, BetLib, PayoutLib)
-- [x] Interfaces (ICasino, ITreasury, IGameRegistry, IGame)
-- [x] Treasury contract with tests
-- [x] Casino contract with tests
-- [x] GameRegistry contract with tests
-- [x] BaseGame abstract contract
-- [x] Integration tests
+### Prerequisites
 
-### Phase 2 (Complete)
-- [x] Chainlink VRF V2.5 integration
-- [x] VRFConsumer contract for randomness requests
-- [x] VRFConsumerBaseV2Plus abstract contract
-- [x] GameResolver for Chainlink Automation
-- [x] BaseGameVRF abstract contract
-- [x] VRF unit tests
-- [x] GameResolver unit tests
+1. Copy `.env.example` to `.env` and configure:
+   - `PRIVATE_KEY` - Deployer wallet private key
+   - `ADMIN_ADDRESS` - Admin address for contracts
+   - `VRF_SUBSCRIPTION_ID` - Chainlink VRF subscription ID
+   - Network-specific VRF coordinator and key hash
 
-### Phase 3 (Complete)
-- [x] Roulette game implementation
-- [x] European roulette rules (single zero)
-- [x] All bet types (straight, split, street, corner, line, column, dozen, red/black, odd/even, high/low)
-- [x] RouletteLib library with validation and payout calculations
-- [x] Comprehensive unit tests (43 tests)
+2. Create a Chainlink VRF subscription at [vrf.chain.link](https://vrf.chain.link)
 
-### Phase 4 (Complete)
-- [x] Blackjack game implementation
-- [x] Standard Vegas blackjack rules (dealer hits soft 17)
-- [x] BlackjackLib library with card handling and hand calculations
-- [x] Multi-step game flow with VRF randomness (10 words)
-- [x] Hit, Stand, Double Down, Split actions
-- [x] Insurance side bet
-- [x] Comprehensive unit tests (30 tests)
+### Deploy to Testnet
 
-### Phase 5 (Planned)
-- [ ] Deployment scripts for testnets
-- [ ] Mainnet deployment (Arbitrum/Base)
-- [ ] Frontend integration
+```bash
+# Deploy all contracts to Arbitrum Sepolia
+forge script script/DeployAll.s.sol:DeployAll \
+  --rpc-url arbitrum_sepolia \
+  --broadcast \
+  --verify
+
+# Or deploy to Base Sepolia
+forge script script/DeployAll.s.sol:DeployAll \
+  --rpc-url base_sepolia \
+  --broadcast \
+  --verify
+```
+
+### Deploy to Mainnet
+
+```bash
+# Deploy to Arbitrum One
+forge script script/DeployAll.s.sol:DeployAll \
+  --rpc-url arbitrum \
+  --broadcast \
+  --verify
+
+# Deploy to Base
+forge script script/DeployAll.s.sol:DeployAll \
+  --rpc-url base \
+  --broadcast \
+  --verify
+```
+
+### Post-Deployment Steps
+
+1. **Add VRF Consumer**: Go to [vrf.chain.link](https://vrf.chain.link) and add the deployed VRFConsumer address as a consumer to your subscription.
+
+2. **Fund Treasury**: Send ETH to the Treasury contract for bankroll:
+   ```bash
+   cast send $TREASURY_ADDRESS --value 10ether --rpc-url arbitrum_sepolia
+   ```
+
+3. **Verify Deployment**: Run the verification script:
+   ```bash
+   forge script script/Verify.s.sol:VerifyDeployment --rpc-url arbitrum_sepolia
+   ```
+
+### Deployment Scripts
+
+| Script | Description |
+|--------|-------------|
+| `DeployAll.s.sol` | Full system deployment (recommended) |
+| `DeployCore.s.sol` | Deploy only core contracts |
+| `DeployGames.s.sol` | Deploy games and register with existing core |
+| `Verify.s.sol` | Verify deployment configuration |
+
+### Frontend Integration
+
+Export ABIs for frontend:
+
+```bash
+# Build contracts first
+forge build
+
+# Export ABIs
+./script/export-abis.sh
+```
+
+ABIs are exported to `frontend/abis/`. The `frontend/contracts.ts` file provides:
+- Network configuration
+- Contract address management
+- Game constants (bet types, payouts)
+- Helper functions
 
 ## Chainlink Network Addresses
 
@@ -610,6 +653,14 @@ Total: 232 tests passing
 ### Arbitrum Sepolia (Testnet)
 - VRF Coordinator: `0x5CE8D5A2BC84beb22a398CCA51996F7930313D61`
 - Key Hash: `0x1770bdc7eec7771f7ba4ffd640f34260d7f095b79c92d34a5b2551d6f6cfd2be`
+
+### Base Mainnet
+- VRF Coordinator: `0xd5D517aBE5cF79B7e95eC98dB0f0277788aFF634`
+- Key Hash: `0x0c4fc1d14b9680b5f7fb4efc2b36fded1ca63eb2a23e09a36b8be5fc9c13e0e3`
+
+### Base Sepolia (Testnet)
+- VRF Coordinator: `0x5C210eF41CD1a72de73bF76eC39637bB0dc89a52`
+- Key Hash: `0x9e9e46732b32662b9adc6f3abdf6c5e926a666d174a4d6b8e39c4e4bea3abe9a`
 
 ## License
 
